@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# R imputeLCMD reference clone (not our code — kept locally only)
+imputeLCMD-ref/
+
+# Notebook / benchmark artifacts (regenerated on demand)
+examples/compare_out/
+data/
+Rplots.pdf

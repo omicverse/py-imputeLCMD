@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyimputelcmd"
+version = "0.1.0"
+description = "Pure-Python port of Bioconductor imputeLCMD — left-censored missing-value imputation for label-free proteomics (MinDet, MinProb, QRILC)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Zehua Zeng", email = "starlitnightly@163.com" },
+]
+keywords = [
+    "proteomics", "imputation", "missing-values",
+    "left-censored", "MNAR", "MCAR",
+    "QRILC", "MinDet", "MinProb",
+    "LC-MS/MS", "DIA", "label-free",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "pandas>=1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov", "ruff"]
+anndata = ["anndata>=0.9"]
+knn = ["scikit-learn>=1.2"]
+
+[project.urls]
+Homepage = "https://github.com/omicverse/py-imputeLCMD"
+Repository = "https://github.com/omicverse/py-imputeLCMD"
+Issues = "https://github.com/omicverse/py-imputeLCMD/issues"
+"Upstream R/Bioc package" = "https://www.bioconductor.org/packages/release/bioc/html/imputeLCMD.html"
+"Upstream (omicverse)" = "https://github.com/Starlitnightly/omicverse"
+
+[tool.setuptools.packages.find]
+include = ["pyimputelcmd*"]
+exclude = ["tests*", "examples*", "imputeLCMD-ref*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::RuntimeWarning",
+]
