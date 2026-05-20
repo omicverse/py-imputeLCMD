@@ -57,6 +57,29 @@ if (method == "mindet") {
   write.table(coef_df,
               file = file.path(out_dir, "qrilc_coefs.tsv"),
               sep = "\t", quote = FALSE, col.names = NA)
+} else if (method == "zero") {
+  out <- impute.ZERO(X)
+} else if (method == "knn") {
+  # impute.wrapper.KNN dispatches to Bioc's impute.knn with K nearest
+  # rows (proteins) — wraps the same algorithm we use on the Python
+  # side via sklearn.KNNImputer.
+  out <- impute.wrapper.KNN(X, K = 10)
+} else if (method == "svd") {
+  out <- impute.wrapper.SVD(X, K = 2)
+} else if (method == "mle") {
+  out <- impute.wrapper.MLE(X)
+} else if (method == "model_selector") {
+  res <- model.Selector(X)
+  # [[1]] = 0/1 per-row flag, [[2]] = censoring threshold.
+  flags <- as.integer(res[[1]])
+  thr <- as.numeric(res[[2]])
+  write.table(
+    data.frame(is_mar = flags),
+    file = file.path(out_dir, "model_selector_flags.tsv"),
+    sep = "\t", quote = FALSE, col.names = NA,
+  )
+  writeLines(as.character(thr), file.path(out_dir, "model_selector_thr.txt"))
+  out <- matrix(flags, ncol = 1)  # so we still write *something*
 } else {
   stop(sprintf("Unknown method: %s", method))
 }

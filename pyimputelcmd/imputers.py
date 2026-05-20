@@ -336,30 +336,62 @@ def impute_qrilc(
 # Dispatcher                                                                  #
 # --------------------------------------------------------------------------- #
 
+def _lazy_wrapper(name: str):
+    """Return a thin shim that imports a wrapper imputer on first call.
+
+    Lets the dispatcher list extended methods (``zero``/``knn``/...)
+    without forcing :mod:`wrappers` and :mod:`model_selector` to load
+    at import time (avoiding scikit-learn as a hard dep on import).
+    """
+    def _shim(X, **kw):
+        from . import wrappers
+        return getattr(wrappers, name)(X, **kw)
+    _shim.__name__ = name
+    return _shim
+
+
 _DISPATCH = {
     'mindet':   impute_mindet,
     'minprob':  impute_minprob,
     'qrilc':    impute_qrilc,
+    'zero':     _lazy_wrapper('impute_zero'),
+    'mle':      _lazy_wrapper('impute_mle'),
+    'knn':      _lazy_wrapper('impute_knn'),
+    'svd':      _lazy_wrapper('impute_svd'),
+    'mar':      _lazy_wrapper('impute_mar'),
+    'mar_mnar': _lazy_wrapper('impute_mar_mnar'),
 }
 
 
 def impute(X: ArrayLike, method: str = 'qrilc', **kwargs) -> ArrayLike:
     r"""Dispatch left-censored imputation by method name.
 
-    A thin wrapper around :func:`impute_mindet`, :func:`impute_minprob`
-    and :func:`impute_qrilc` that picks the right routine via the
-    ``method`` keyword. Convenient when the imputation choice should be
-    a parameter (sweeps, agent tool calls, configuration files).
+    A thin wrapper that selects the right imputer via the ``method``
+    keyword. Handy when the imputation choice should be a parameter
+    (sweeps, agent tool calls, configuration files).
+
+    Supported ``method`` values:
+
+    * ``'mindet'``, ``'minprob'``, ``'qrilc'`` — left-censored MNAR
+      imputers (Lazar 2016).
+    * ``'zero'``  — replace NaN with 0 (``impute.ZERO``).
+    * ``'mle'``   — MVN-EM MLE (``impute.wrapper.MLE``).
+    * ``'knn'``   — per-protein KNN (``impute.wrapper.KNN``).
+    * ``'svd'``   — iterative SVD (``impute.wrapper.SVD``).
+    * ``'mar'``   — :func:`pyimputelcmd.wrappers.impute_mar` (needs
+      ``mcar_mask``).
+    * ``'mar_mnar'`` — combined MAR+MNAR pipeline (needs
+      ``mcar_mask``).
 
     Parameters
     ----------
     X
         2-D matrix (features × samples) with NaN for missing values.
     method
-        One of ``'mindet'``, ``'minprob'``, ``'qrilc'``.
+        See the list above.
     **kwargs
         Forwarded to the chosen imputer (e.g. ``q``, ``tune_sigma``,
-        ``seed``).
+        ``seed``, ``K``, ``mcar_mask``).
 
     Returns
     -------
@@ -369,7 +401,7 @@ def impute(X: ArrayLike, method: str = 'qrilc', **kwargs) -> ArrayLike:
     Examples
     --------
     >>> imputed = impute(X, method='qrilc', tune_sigma=1.0, seed=0)
-    >>> imputed = impute(X, method='mindet', q=0.005)
+    >>> imputed = impute(X, method='knn', K=15)
     """
     key = method.lower().strip()
     if key not in _DISPATCH:

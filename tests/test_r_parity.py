@@ -27,7 +27,16 @@ import pandas as pd
 import pytest
 from scipy import stats
 
-from pyimputelcmd import impute_mindet, impute_minprob, impute_qrilc
+from pyimputelcmd import (
+    impute_knn,
+    impute_mindet,
+    impute_minprob,
+    impute_mle,
+    impute_qrilc,
+    impute_svd,
+    impute_zero,
+    model_selector,
+)
 
 
 HERE = Path(__file__).parent
@@ -214,3 +223,130 @@ def test_qrilc_sampled_distribution_matches_R(workdir):
             f"QRILC distribution mismatch in {col}: "
             f"KS stat={ks.statistic:.3f}, p={ks.pvalue:.4g}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# v0.1.1 MAR-wrapper parity                                                   #
+# --------------------------------------------------------------------------- #
+def _make_correlated_dataset() -> pd.DataFrame:
+    """Low-rank (rank-2) + noise matrix with inter-sample correlation.
+
+    KNN / SVD / MLE only recover a *signal* when the samples are
+    correlated — a purely-random matrix has a diagonal covariance and
+    leaves nothing for any of these imputers to reconstruct. This
+    fixture mirrors a realistic proteomics intensity matrix (a handful
+    of latent factors driving co-variation across samples) so the
+    R-vs-Python parity checks are meaningful.
+    """
+    rng = np.random.default_rng(7)
+    n_prot, n_samp = 800, 6
+    loadings = rng.normal(0.0, 1.0, (n_prot, 2))
+    factors = rng.normal(0.0, 2.0, (2, n_samp))
+    signal = loadings @ factors
+    base = rng.normal(20.0, 0.5, n_prot)[:, None]
+    X = base + signal + rng.normal(0.0, 0.3, (n_prot, n_samp))
+    miss = rng.uniform(size=X.shape) < 0.10  # 10% MCAR
+    X[miss] = np.nan
+    return pd.DataFrame(
+        X,
+        index=[f"prot_{i}" for i in range(n_prot)],
+        columns=[f"S{j}" for j in range(n_samp)],
+    )
+
+
+def _pearson_on_missing(py: pd.DataFrame, r: pd.DataFrame,
+                        miss: pd.DataFrame) -> float:
+    m = miss.to_numpy()
+    return float(stats.pearsonr(py.to_numpy()[m], r.to_numpy()[m])[0])
+
+
+def test_zero_bit_exact_vs_R(workdir):
+    """impute.ZERO is deterministic — must match R bit-for-bit."""
+    df = _make_dataset()
+    input_tsv = workdir / "input.tsv"
+    _write_input(df, input_tsv)
+    _run_r(input_tsv, workdir / "zero", "zero")
+
+    py = impute_zero(df)
+    r = _read_r_imputed(workdir / "zero", "zero")
+    r = r[py.columns]
+    np.testing.assert_allclose(
+        py.to_numpy(), r.to_numpy(), rtol=0, atol=1e-12,
+        err_msg="impute.ZERO output diverges from R imputeLCMD",
+    )
+
+
+def test_knn_correlates_with_R(workdir):
+    """KNN (K=10) on correlated data — Pearson r > 0.95 vs R."""
+    df = _make_correlated_dataset()
+    input_tsv = workdir / "corr_input.tsv"
+    _write_input(df, input_tsv)
+    _run_r(input_tsv, workdir / "knn", "knn")
+
+    py = impute_knn(df, K=10)
+    r = _read_r_imputed(workdir / "knn", "knn")[py.columns]
+    rho = _pearson_on_missing(py, r, df.isna())
+    assert rho > 0.95, f"KNN R-parity too low: Pearson r={rho:.4f}"
+
+
+def test_svd_correlates_with_R(workdir):
+    """SVD (K=2) on correlated data — Pearson r > 0.9 vs R."""
+    df = _make_correlated_dataset()
+    input_tsv = workdir / "corr_input.tsv"
+    _write_input(df, input_tsv)
+    _run_r(input_tsv, workdir / "svd", "svd")
+
+    py = impute_svd(df, K=2)
+    r = _read_r_imputed(workdir / "svd", "svd")[py.columns]
+    rho = _pearson_on_missing(py, r, df.isna())
+    assert rho > 0.9, f"SVD R-parity too low: Pearson r={rho:.4f}"
+
+
+def test_mle_correlates_with_R(workdir):
+    """MLE on correlated data — Pearson r > 0.9 vs R.
+
+    We compare the deterministic conditional-mean fill (``sample=False``)
+    against R's ``imp.norm`` draw — the EEM-fitted (μ, Σ) agree, so the
+    conditional means track R's draws closely (EM convergence and the
+    I-step PRNG differ, hence a correlation rather than bit-exact
+    check).
+    """
+    df = _make_correlated_dataset()
+    input_tsv = workdir / "corr_input.tsv"
+    _write_input(df, input_tsv)
+    _run_r(input_tsv, workdir / "mle", "mle")
+
+    py = impute_mle(df, seed=0, sample=False)
+    r = _read_r_imputed(workdir / "mle", "mle")[py.columns]
+    rho = _pearson_on_missing(py, r, df.isna())
+    assert rho > 0.9, f"MLE R-parity too low: Pearson r={rho:.4f}"
+
+
+def test_model_selector_agrees_with_R(workdir):
+    """model.Selector flags agree with R on > 90% of proteins."""
+    # Bimodal MAR + MNAR dataset so the classifier has both classes.
+    rng = np.random.default_rng(42)
+    n_high, n_low, n_samples = 300, 100, 6
+    X = np.empty((n_high + n_low, n_samples))
+    X[:n_high] = rng.normal(25.0, 1.0, (n_high, n_samples))
+    X[n_high:] = rng.normal(15.0, 0.5, (n_low, n_samples))
+    X[n_high:][X[n_high:] < 14.5] = np.nan
+    miss = rng.uniform(size=(n_high, n_samples)) < 0.05
+    X[:n_high][miss] = np.nan
+    df = pd.DataFrame(
+        X,
+        index=[f"prot_{i}" for i in range(X.shape[0])],
+        columns=[f"S{j}" for j in range(X.shape[1])],
+    )
+    input_tsv = workdir / "ms_input.tsv"
+    _write_input(df, input_tsv)
+    _run_r(input_tsv, workdir / "ms", "model_selector")
+
+    r_flags = pd.read_csv(
+        workdir / "ms" / "model_selector_flags.tsv", sep="\t", index_col=0,
+    )["is_mar"].to_numpy()
+    is_mar_py, _ = model_selector(X)
+    agreement = float((is_mar_py == (r_flags == 1)).mean())
+    assert agreement > 0.90, (
+        f"model.Selector agreement with R too low: {agreement * 100:.1f}%"
+    )
